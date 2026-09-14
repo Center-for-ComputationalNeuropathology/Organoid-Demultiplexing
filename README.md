@@ -12,7 +12,7 @@ We built this to answer one question for the KWO batches: *of the cells
 Vireo left unassigned, how many can we actually resolve from the reads
 themselves, and how much should we trust that call?*
 
-## The result, on our real KWO-1..11 data
+## The result, on our real KWO Batch datasets
 
 ![Vireo vs all-informative-SNP assignment, KWO-1..11](examples/KWO1-11_combined_vireo_vs_allSNP_UMI_counts.png)
 
