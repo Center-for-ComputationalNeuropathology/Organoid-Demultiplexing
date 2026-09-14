@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Regenerable pipeline output
+results/
+
+# Real per-batch data does not belong in this repo - only data/example/ (synthetic) is tracked.
+data/*
+!data/example/
+!data/README.md
