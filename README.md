@@ -12,25 +12,71 @@ We built this to answer one question for the KWO batches: *of the cells
 Vireo left unassigned, how many can we actually resolve from the reads
 themselves, and how much should we trust that call?*
 
-## The result, on our real KWO Batch datasets
+**Contents:** [Results](#results-at-a-glance) ·
+[Method](#the-method) ·
+[Setup](#setup) ·
+[Running it](#running-it-on-the-kwo-batches) ·
+[Scripts, with real examples](#every-script-with-a-real-example-from-our-data) ·
+[Synthetic test data](#try-it-without-touching-real-data) ·
+[Donor mapping](#donor-name-harmonization)
+
+## Results at a glance
+
+Across all 11 KWO batches, **176,987 cells** total:
+
+![How Vireo and the all-SNP approach reconcile](examples/reconciliation_summary.png)
+
+### Assignments from each method
+
+| | Vireo | All-informative-SNP (this pipeline) |
+|---|--:|--:|
+| Assigned to a donor | 46,961 (26.5%) | 136,111 (76.9%) |
+| Unresolved | 129,051 (72.9%) | 40,876 (23.1%) |
+| Doublet | 975 (0.6%) | — (no doublet model) |
+
+### Overlap, where both methods make a call
+
+| | Cells | % of jointly-resolved cells |
+|---|--:|--:|
+| Same donor (agree) | 46,939 | 99.96% |
+| Different donor (disagree) | 18 | 0.04% |
+
+Essentially total agreement (46,939 vs. 18) wherever both methods are
+willing to commit to a donor.
+
+### Recovering Vireo's unassigned / doublet cells
+
+Vireo does not confidently call **130,026** cells (129,051 `Unassigned` +
+975 `Doublet`). Of those:
+
+| | Cells | % of the 130,026 |
+|---|--:|--:|
+| Recovered (all-SNP assigns a donor) | **89,154** | 68.6% |
+| — with ≥500 UMI | 15,371 | 17.2% of recovered |
+| — with <500 UMI | 73,783 | 82.8% of recovered |
+| Still unresolved by both methods | 40,872 | 31.4% |
+
+So roughly two-thirds of the cells Vireo gives up on can be resolved from
+the reads alone — but **83% of those recoveries are `<500 UMI`**, i.e. a
+handful of reads deciding the call. We treat those as provisional, not
+equivalent in confidence to a Vireo singlet.
+
+### Still ambiguous or unresolved with our approach
+
+**40,876 cells (23.1% of all cells)** remain unresolved by the all-SNP
+method too:
+
+| | Cells |
+|---|--:|
+| `Ambiguous` — exact tie between ≥2 donors | 24,388 |
+| `No evidence` — zero informative-SNP reads | 16,488 |
+
+The batch-by-batch breakdown behind all of this:
 
 ![Vireo vs all-informative-SNP assignment, KWO-1..11](examples/KWO1-11_combined_vireo_vs_allSNP_UMI_counts.png)
 
-Left bar of each pair = Vireo, right bar = this pipeline. Across all 11
-batches (176,987 cells):
-
-| | Vireo | all-SNP (this pipeline) |
-|---|--:|--:|
-| assigned to a donor | 46,961 | 136,111 |
-| unresolved | 129,051 | 40,876 |
-| doublet | 975 | — (no doublet model) |
-
-Where both methods make a call they agree almost perfectly (46,939
-same-donor vs. 18 disagreements out of 176,987 cells). The extra ~89,000
-cells this pipeline assigns beyond Vireo are overwhelmingly low-UMI
-(74,419 of them are `<500 UMI`) — real signal, but resting on very few
-reads, so we treat them as provisional rather than as confident as a
-Vireo singlet call. See `examples/` for how this looks batch by batch.
+Left bar of each pair = Vireo, right bar = this pipeline, coloured by donor.
+See `examples/` for the `≥500 UMI`-only version and a single-batch example.
 
 ## The method
 
@@ -67,10 +113,11 @@ Point `--data-dir` at wherever your `KWO-N_SNP_evidence_part01.tsv.gz` and
 
 ```bash
 python assign_donors_from_snps.py --data-dir /path/to/KWO_data --out-dir results
-python scripts/combine_batches.py           --results-dir results
-python scripts/filter_umi500.py             --results-dir results
-python scripts/summarize_overlap.py         --results-dir results
-python scripts/summarize_combined_figure.py --results-dir results
+python scripts/combine_batches.py            --results-dir results
+python scripts/filter_umi500.py              --results-dir results
+python scripts/summarize_overlap.py          --results-dir results
+python scripts/summarize_combined_figure.py  --results-dir results
+python scripts/plot_reconciliation_summary.py --results-dir results
 ```
 
 Batches (`KWO-1`, `KWO-2`, ...) and each batch's donor trio are read
@@ -102,9 +149,9 @@ Here's KWO-9's:
 ```bash
 python scripts/combine_batches.py --results-dir results
 ```
-This is the headline figure at the top of this README
+Produces the batch-by-batch figure in **Results at a glance**
 (`combined_vireo_vs_allSNP_UMI_counts.png` / `..._percent.png`), plus
-`combined_bar_counts.tsv` — the tidy data behind it.
+`combined_bar_counts.tsv` — the tidy data behind it and behind script 5.
 
 ### 3. `scripts/filter_umi500.py` — the same comparison, confident cells only
 
@@ -150,6 +197,16 @@ change per category:
 | Unresolved | 15,630   | 113,421  | 129,051     | 1,237     | 39,639    | 40,876       | -88,175 |
 | Doublet    | 974      | 1        | 975         | 0         | 0         | 0            | -975    |
 ```
+
+### 6. `scripts/plot_reconciliation_summary.py` — the headline figure and numbers
+
+```bash
+python scripts/plot_reconciliation_summary.py --results-dir results
+```
+Partitions every cell into exactly one outcome (agree / rescued ≥500 UMI /
+rescued <500 UMI / discordant / unresolved by both) and produces the
+figure at the top of this README plus `reconciliation_summary.tsv`. This is
+the script behind every number in **Results at a glance** above.
 
 ## Try it without touching real data
 
