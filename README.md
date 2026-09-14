@@ -1,85 +1,179 @@
-# Donor assignment from all informative SNPs
+# Organoid Demultiplexing — Donor Assignment from All Informative SNPs
 
-A from-scratch, Vireo-independent way to assign pooled single-cell RNA-seq
-cells back to their donor of origin using every donor-informative SNP a cell
-has read coverage at, plus scripts to compare that call against Vireo's own
-assignment across any number of batches.
+This is our pipeline for the **Kristen Organoids single-cell RNA-seq project**
+(batches **KWO-1 through KWO-11**, three donors pooled per 10x run). Each
+batch is demultiplexed with **Vireo**, but Vireo only calls a donor when it's
+>90% confident, which leaves a lot of cells `Unassigned`. This repo is our
+from-scratch cross-check: it re-derives a donor call for every cell directly
+from the raw allele reads at every SNP that actually distinguishes that
+batch's three donors, independent of Vireo, and compares the two.
 
-## Method
+We built this to answer one question for the KWO batches: *of the cells
+Vireo left unassigned, how many can we actually resolve from the reads
+themselves, and how much should we trust that call?*
 
-1. **Find donor-informative SNPs.** A locus is informative for a batch if
-   every candidate donor has a valid genotype there (`0/0`, `0/1`, `1/1`) and
-   at least two donors differ.
+## The result, on our real KWO-1..11 data
+
+![Vireo vs all-informative-SNP assignment, KWO-1..11](examples/KWO1-11_combined_vireo_vs_allSNP_UMI_counts.png)
+
+Left bar of each pair = Vireo, right bar = this pipeline. Across all 11
+batches (176,987 cells):
+
+| | Vireo | all-SNP (this pipeline) |
+|---|--:|--:|
+| assigned to a donor | 46,961 | 136,111 |
+| unresolved | 129,051 | 40,876 |
+| doublet | 975 | — (no doublet model) |
+
+Where both methods make a call they agree almost perfectly (46,939
+same-donor vs. 18 disagreements out of 176,987 cells). The extra ~89,000
+cells this pipeline assigns beyond Vireo are overwhelmingly low-UMI
+(74,419 of them are `<500 UMI`) — real signal, but resting on very few
+reads, so we treat them as provisional rather than as confident as a
+Vireo singlet call. See `examples/` for how this looks batch by batch.
+
+## The method
+
+1. **Find donor-informative SNPs.** For a batch's three donors, a SNP is
+   informative if all three have a valid genotype there (`0/0`, `0/1`,
+   `1/1`) and at least two of them differ.
 2. **Score each cell against each donor.** Summing over every informative
    locus the cell has reads at:
-
    ```
    loglik[donor] += ALT_reads * ln(p) + REF_reads * ln(1 - p)
    ```
-
    where `p = P(observe an ALT read | genotype)` = `{0/0: 0.01, 0/1: 0.5, 1/1: 0.99}`.
-3. **Call the donor with the highest total.** An exact tie -> `Ambiguous`.
-   Zero informative reads -> `No evidence`.
-4. **Flag by UMI** (`<cutoff` vs `>= cutoff`, default 500) and compare against
-   Vireo's own `vireo_status` / `vireo_donor`.
+3. **Call the donor with the highest total.** An exact tie → `Ambiguous`.
+   Zero informative reads → `No evidence`.
+4. **Flag by UMI** (`<500` vs `≥500`, configurable) and compare against
+   Vireo's `vireo_status` / `vireo_donor`.
 
-This is deliberately simple - no doublet model, no prior, no genotype
-uncertainty - so where it disagrees with Vireo, the disagreement is
-informative: it usually means the confidence is being spent on very few
-reads either way.
+No doublet model, no prior, no genotype uncertainty — it's deliberately the
+simplest possible per-read tally, so where it disagrees with Vireo the
+disagreement is informative (almost always: too few reads to trust either
+call).
 
-## Install
+## Setup
 
-```
+```bash
 pip install -r requirements.txt
 ```
 
-Everything else is the standard library.
+## Running it on the KWO batches
 
-## Quickstart (synthetic example)
+Point `--data-dir` at wherever your `KWO-N_SNP_evidence_part01.tsv.gz` and
+`KWO-N_cell_scores.tsv.gz` files live (not tracked in this repo — see
+`data/README.md`):
 
-```
-python assign_donors_from_snps.py --data-dir data/example --out-dir results
-python scripts/combine_batches.py         --results-dir results
-python scripts/filter_umi500.py           --results-dir results
-python scripts/summarize_overlap.py       --results-dir results
+```bash
+python assign_donors_from_snps.py --data-dir /path/to/KWO_data --out-dir results
+python scripts/combine_batches.py           --results-dir results
+python scripts/filter_umi500.py             --results-dir results
+python scripts/summarize_overlap.py         --results-dir results
 python scripts/summarize_combined_figure.py --results-dir results
 ```
 
-`data/example/` is a 5-cell, fully-synthetic dataset (see `data/README.md`)
-that exercises every outcome the pipeline can produce - run the five
-commands above and check `results/` to see what each script contributes.
+Batches (`KWO-1`, `KWO-2`, ...) and each batch's donor trio are read
+straight from the file names and the `GT_<donor>` columns — nothing is
+hard-coded, so it also just works if a KWO-12 shows up later, or if a batch
+has a different donor trio.
 
-## On your own data
+## Every script, with a real example from our data
 
+### 1. `assign_donors_from_snps.py` — per-batch assignment
+
+The core step: computes the all-SNP call for every cell in a batch, flags
+UMI, and compares to Vireo.
+
+```bash
+python assign_donors_from_snps.py --data-dir /path/to/KWO_data --out-dir results
 ```
-python assign_donors_from_snps.py --data-dir /path/to/batches --out-dir results
+```
+KWO-9: donors=['NDBB060->NPBB60', 'F13505->F13505', 'MSN08->MSN08'] cells=26297 <500 UMI=19689 loci=12310 informative=11031
+```
+Writes, per batch, `results/<batch>_all_SNPs_vs_vireo/`: the per-cell calls
+(`all_SNP_cell_assignments_UMI_flagged.tsv`), count tables, and a bar chart.
+Here's KWO-9's:
+
+![KWO-9 harmonized assignment bars](examples/KWO-9_harmonized_UMI_bars.png)
+
+### 2. `scripts/combine_batches.py` — every batch, one figure
+
+```bash
+python scripts/combine_batches.py --results-dir results
+```
+This is the headline figure at the top of this README
+(`combined_vireo_vs_allSNP_UMI_counts.png` / `..._percent.png`), plus
+`combined_bar_counts.tsv` — the tidy data behind it.
+
+### 3. `scripts/filter_umi500.py` — the same comparison, confident cells only
+
+```bash
+python scripts/filter_umi500.py --results-dir results
+```
+Same layout, restricted to `≥500 UMI` cells (no UMI hatching needed — it's
+now a hard filter), same donor colours as script 2:
+
+![>=500 UMI cells only, KWO-1..11](examples/KWO1-11_UMI500_filtered_assignments_percent.png)
+
+At ≥500 UMI the two bars are nearly identical in every batch — the extra
+donor calls the all-SNP method finds are concentrated almost entirely in
+the low-UMI cells filtered out here.
+
+### 4. `scripts/summarize_overlap.py` — assigned vs. unassigned, and the overlap
+
+```bash
+python scripts/summarize_overlap.py --results-dir results
+```
+Prints (and writes `vireo_vs_snp_method_totals.tsv` / `vireo_vs_snp_overlap.tsv`):
+```
+## Method totals (confident assignments)
+| batch | total_cells | vireo_assigned | vireo_unassigned | vireo_doublet | snp_assigned | snp_unresolved |
+| ALL   | 176,987     | 46,961         | 129,051          | 975           | 136,111      | 40,876         |
+
+## Overlap of the two approaches
+| batch | total_cells | both_same_donor | both_diff_donor | vireo_only | snp_only_rescued | neither |
+| ALL   | 176,987     | 46,939          | 18               | 4          | 89,154            | 40,872  |
 ```
 
-See `data/README.md` for the exact file naming and columns each batch needs.
-Batches are auto-discovered from `*_SNP_evidence_part01.tsv.gz` in
-`--data-dir`, or pass `--batches BATCH-A,BATCH-B` explicitly. Real donor
-genotype data should stay out of version control - `.gitignore` already
-excludes everything under `data/` except `data/example/`.
+### 5. `scripts/summarize_combined_figure.py` — the figure, as a table
 
-## Scripts
+```bash
+python scripts/summarize_combined_figure.py --results-dir results
+```
+Reshapes script 2's output into per-batch and combined tables with the net
+change per category:
+```
+### ALL batches combined
+| assignment | Vireo ge | Vireo lt | Vireo total | allSNP ge | allSNP lt | allSNP total | Δ total |
+| Donor      | 46,325   | 636      | 46,961      | 61,692    | 74,419    | 136,111      | +89,150 |
+| Unresolved | 15,630   | 113,421  | 129,051     | 1,237     | 39,639    | 40,876       | -88,175 |
+| Doublet    | 974      | 1        | 975         | 0         | 0         | 0            | -975    |
+```
 
-| Script | Input | Output |
-|---|---|---|
-| `assign_donors_from_snps.py` | `<batch>_SNP_evidence_part01.tsv.gz`, `<batch>_cell_scores.tsv.gz` | per-batch `<batch>_all_SNPs_vs_vireo/`: per-cell assignments TSV, count TSVs, two bar-chart PNGs |
-| `scripts/combine_batches.py` | the per-batch dirs above | one figure across all batches (counts + %), coloured by donor, split by UMI |
-| `scripts/filter_umi500.py` | `combine_batches.py`'s tidy TSV | the same comparison restricted to `>= cutoff` UMI cells, both methods on one colour scheme |
-| `scripts/summarize_overlap.py` | the per-batch dirs | per-batch tables: Vireo assigned/unassigned/doublet, manual assigned/unresolved, and the cell-level overlap of the two (agree / disagree / rescued / neither) |
-| `scripts/summarize_combined_figure.py` | `combine_batches.py`'s tidy TSV | the combined figure as a table, with the net Vireo -> manual change per category |
+## Try it without touching real data
 
-`donor_mapping.py` harmonises donor aliases (e.g. `"VAMD05-C"` and `"VAMD05"`
-are the same donor) - edit `DONOR_MAPPING` for your own donor IDs; anything
-not listed passes through unchanged.
+`data/example/` is a 5-cell, fully-synthetic dataset that hits every
+outcome the pipeline can produce (agree, rescue, tie, no evidence, doublet)
+— useful for testing changes to the code without going near real donor
+genotypes:
 
-## A note on interpreting disagreements
+```bash
+python assign_donors_from_snps.py --data-dir data/example --out-dir /tmp/example_results
+python scripts/combine_batches.py --results-dir /tmp/example_results
+```
 
-Wherever a cell has reasonable coverage (dozens of informative SNPs), Vireo
-and this method agree essentially every time. Most of what this method
-"rescues" beyond Vireo are low-UMI cells resolved on a handful of reads -
-useful to know, but treat those calls as provisional, not equivalent in
-confidence to a Vireo singlet call.
+## Donor name harmonization
+
+`donor_mapping.py` collapses aliases for the same donor across runs (e.g.
+`SRR13291835` and `NDBB060` are the actual donor IDs behind two of our KWO
+donor codes, `MSN04` and `NPBB60`). Add new aliases to `DONOR_MAPPING` as we
+pick up more batches; anything not listed passes through unchanged.
+
+## A note on the real donor data
+
+Real KWO batch files (`*_SNP_evidence_part01.tsv.gz`, `*_cell_scores.tsv.gz`)
+contain donor genotype calls and are **not** tracked in this repo — see
+`data/README.md` for the file format and where they live for us. Only the
+synthetic example and the aggregate result figures/tables above (cell
+counts, not genotypes) are checked in.
